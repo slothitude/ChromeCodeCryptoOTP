@@ -97,10 +97,10 @@ async function main() {
 	const execText = (execResult.content as any)[0].text;
 	log("Tool returns to Claude", execText);
 
-	if (execText.startsWith("[AUTHENTICATED]")) {
-		console.log("\n    >>> Claude sees [AUTHENTICATED] — it will act on this instruction <<<");
+	if (execText === instruction) {
+		console.log("\n    >>> Instruction returned directly — Claude will act on it (came from chromecode_execute) <<<");
 	} else {
-		console.log("\n    >>> Claude sees no auth marker — it will ignore this <<<");
+		console.log("\n    >>> Rejection — Claude will do nothing <<<");
 	}
 
 	// ── STEP 4: Injection attack ──
@@ -123,7 +123,7 @@ async function main() {
 	});
 	const attackText = (attackResult.content as any)[0].text;
 	log("Tool returns to Claude", attackText);
-	console.log("\n    >>> Claude gets no [AUTHENTICATED] — injection BLOCKED <<<");
+	console.log("\n    >>> Generic rejection — Claude does nothing. Injection BLOCKED. <<<");
 
 	// ── STEP 5: More messages ──
 	console.log("\n" + "─".repeat(60));
@@ -151,7 +151,7 @@ async function main() {
 			},
 		});
 		const xText = (x.content as any)[0].text;
-		console.log(`    [AUTHENTICATED] seq=${eData.sequence} "${msg}"`);
+		console.log(`    VERIFIED seq=${eData.sequence} "${xText}"`);
 	}
 
 	// ── STEP 6: Status ──
