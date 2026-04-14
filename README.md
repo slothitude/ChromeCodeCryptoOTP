@@ -201,11 +201,27 @@ npx tsc --noEmit
 # Build
 npx tsc
 
-# Run tests
+# Run unit tests
 npm test
+
+# Run attack suite (20 injection attempts)
+node --import tsx attack-test.ts
 ```
 
-20 integration tests covering: session management, encrypt/decrypt roundtrip, injection rejection, replay attack detection, desync detection, and full MCP protocol integration.
+### Test results
+
+**Unit tests** (20): session management, encrypt/decrypt roundtrip, injection rejection, replay attack detection, desync detection, full MCP protocol integration.
+
+**Attack suite** (20/20 blocked): automated test suite that fires 20 different injection techniques at a live MCP server and verifies every one is rejected:
+
+| Phase | Attacks | Result |
+|-------|---------|--------|
+| **Baseline** | Clean roundtrip, sequential messages | Legitimate messages pass through |
+| **Cryptographic** | Replay attack, single-bit flip, wrong sequence, wrong position | All rejected |
+| **Raw injection** | Random garbage, empty ciphertext, all-zeros, classic "ignore instructions", fake `[VERIFIED]` marker, Unicode RTL tricks, SQL injection, system message impersonation, multi-step chained injection, markdown XSS, double-encoded base64, JSON injection, oversized 1MB payload | All rejected |
+| **Brute-force** | 1000 random ciphertext attempts | None passed CRC32 |
+
+Run it yourself: `node --import tsx attack-test.ts`
 
 ## Architecture
 

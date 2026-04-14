@@ -170,13 +170,23 @@ This also catches desync — if messages are lost or reordered, the sequence mis
 ## What We Tested
 
 - **168 tests** across the cryptocode monorepo and ChromeCode MCP server
+- **20/20 attack suite** — an automated test that fires every injection technique we could think of at a live MCP server and verifies every one is blocked:
+
+| Phase | Attacks | Result |
+|-------|---------|--------|
+| **Baseline** | Clean encrypt→decrypt roundtrip, multiple sequential messages | Legitimate messages pass through |
+| **Cryptographic** | Replay attack, single-bit flip tampering, wrong sequence number, wrong pad position | All rejected |
+| **Raw injection** | Random garbage bytes, empty ciphertext, all-zero ciphertext, classic "ignore all instructions", fake `[VERIFIED]` marker, Unicode RTL override + zero-width chars, SQL injection, system message impersonation, multi-step chained injection, markdown XSS links, double-encoded base64, JSON injection via metadata fields, oversized 1MB payload | All rejected |
+| **Brute-force** | 1000 random ciphertext attempts | None passed CRC32 validation |
+
+Additional tests:
 - Encrypt/decrypt roundtrip with real pad material from GitHub
 - Tampered ciphertext rejection (CRC32 fails)
 - Replay attack rejection (sequence mismatch)
-- Injection attack rejection (fake ciphertext → garbage → rejected)
 - No-template verification (tool returns instruction directly, no markers)
 - Full MCP protocol integration via stdio transport (same transport Claude Desktop uses)
 - Desync detection and recovery
+- Information leakage prevention (internal errors return generic rejection, never expose pad state)
 
 ## What It Can't Do (Yet)
 
@@ -195,7 +205,7 @@ The code is open source:
 - **[Cryptocode](https://github.com/slothitude/cryptocode)** — the full OTP engine (XOR cipher, envelope format, pad chains, desync recovery, ECDH handshake)
 - **[ChromeCodeCryptoOTP](https://github.com/slothitude/ChromeCodeCryptoOTP)** — MCP server that wraps cryptocode for any LLM agent
 
-168 tests. Real pad material. Working end-to-end over stdio. MIT license.
+168 tests. 20/20 attacks blocked. Real pad material. Working end-to-end over stdio. MIT license.
 
 Prompt injection is solvable. We just needed to use the right math.
 
