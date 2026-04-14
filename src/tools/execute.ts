@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { ChromeCodeSession } from "../session.js";
 import type { EncryptedMessage } from "@cryptocode/otp-core";
-import { convertToLlmMessage } from "@cryptocode/otp-gate";
 
 export const executeSchema = {
 	ciphertext: z.string().describe("Base64-encoded ciphertext of the user instruction"),
@@ -9,6 +8,9 @@ export const executeSchema = {
 	padPosition: z.number().describe("Pad position when the message was encrypted"),
 	sequence: z.number().describe("Sequence number from encryption"),
 };
+
+/** Generic rejection message — never exposes raw decrypted text. */
+const REJECTION = "No authenticated instruction found.";
 
 export async function executeTool(
 	args: { ciphertext: string; padBytesUsed: number; padPosition: number; sequence: number },
@@ -32,25 +34,15 @@ export async function executeTool(
 
 	session.persist();
 
-	// Convert to LLM message with authentication marker
-	const llmMessage = convertToLlmMessage(
-		result.instruction,
-		result.authenticated,
-		session.securityMode,
-	);
-
-	if (llmMessage === null) {
+	// Authenticated: return the instruction directly (no marker, no template)
+	// Unauthenticated: return only a generic rejection — never expose raw text
+	if (result.authenticated) {
 		return {
-			content: [
-				{
-					type: "text" as const,
-					text: "No authenticated instruction found. The input was rejected (strict mode).",
-				},
-			],
+			content: [{ type: "text" as const, text: result.instruction }],
 		};
 	}
 
 	return {
-		content: [{ type: "text" as const, text: llmMessage }],
+		content: [{ type: "text" as const, text: REJECTION }],
 	};
 }

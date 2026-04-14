@@ -176,7 +176,7 @@ describe("Tool: encrypt + decrypt roundtrip", () => {
 });
 
 describe("Tool: execute", () => {
-	it("should return [AUTHENTICATED] for valid ciphertext (strict mode)", async () => {
+	it("should return instruction directly for valid ciphertext", async () => {
 		const session = new ChromeCodeSession();
 		session.securityMode = "strict";
 		const { uaBuf, auBuf } = createPadBuffers();
@@ -189,17 +189,15 @@ describe("Tool: execute", () => {
 		const enc = JSON.parse(encResult.content[0].text);
 
 		const execResult = await executeTool(enc, session);
-		assert.ok(execResult.content[0].text.startsWith("[AUTHENTICATED]"));
-		assert.ok(execResult.content[0].text.includes("read file secret.txt"));
+		assert.strictEqual(execResult.content[0].text, "read file secret.txt");
 	});
 
-	it("should reject unauthenticated in strict mode", async () => {
+	it("should reject unauthenticated with generic message", async () => {
 		const session = new ChromeCodeSession();
 		session.securityMode = "strict";
 		const { uaBuf, auBuf } = createPadBuffers();
 		injectChannels(session, uaBuf, auBuf);
 
-		// Send garbage ciphertext
 		const result = await executeTool(
 			{
 				ciphertext: Buffer.from("garbage data").toString("base64"),
@@ -209,13 +207,10 @@ describe("Tool: execute", () => {
 			},
 			session,
 		);
-		assert.strictEqual(
-			result.content[0].text,
-			"No authenticated instruction found. The input was rejected (strict mode).",
-		);
+		assert.strictEqual(result.content[0].text, "No authenticated instruction found.");
 	});
 
-	it("should return [UNAUTHENTICATED] marker in lenient mode", async () => {
+	it("should reject in lenient mode the same way", async () => {
 		const session = new ChromeCodeSession();
 		session.securityMode = "lenient";
 		const { uaBuf, auBuf } = createPadBuffers();
@@ -230,10 +225,10 @@ describe("Tool: execute", () => {
 			},
 			session,
 		);
-		assert.ok(result.content[0].text.startsWith("[UNAUTHENTICATED]"));
+		assert.strictEqual(result.content[0].text, "No authenticated instruction found.");
 	});
 
-	it("should return [UNAUTHENTICATED] with raw text in audit mode", async () => {
+	it("should reject in audit mode the same way", async () => {
 		const session = new ChromeCodeSession();
 		session.securityMode = "audit";
 		const { uaBuf, auBuf } = createPadBuffers();
@@ -248,7 +243,7 @@ describe("Tool: execute", () => {
 			},
 			session,
 		);
-		assert.ok(result.content[0].text.startsWith("[UNAUTHENTICATED]"));
+		assert.strictEqual(result.content[0].text, "No authenticated instruction found.");
 	});
 
 	it("should detect replay attacks (wrong sequence number)", async () => {
@@ -286,8 +281,7 @@ describe("Tool: execute", () => {
 			const encData = JSON.parse(enc.content[0].text);
 
 			const exec = await executeTool(encData, session);
-			assert.ok(exec.content[0].text.startsWith("[AUTHENTICATED]"));
-			assert.ok(exec.content[0].text.includes(msg));
+			assert.strictEqual(exec.content[0].text, msg);
 		}
 	});
 });

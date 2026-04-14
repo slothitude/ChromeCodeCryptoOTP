@@ -6,7 +6,7 @@ import { decryptTool, decryptSchema } from "./tools/decrypt.js";
 import { executeTool, executeSchema } from "./tools/execute.js";
 import { statusTool } from "./tools/status.js";
 import { resyncTool, resyncSchema } from "./tools/resync.js";
-import { protectionPrompt, OTP_SYSTEM_PROMPT_ADDON } from "./prompts.js";
+import { protectionPrompt, CHROMECODE_SYSTEM_PROMPT } from "./prompts.js";
 import { sessionResource } from "./resources.js";
 
 /** Shared session instance for all tool handlers. */
@@ -16,7 +16,7 @@ export const session = new ChromeCodeSession();
 export function createServer(): McpServer {
 	const server = new McpServer(
 		{ name: "chromecode-crypto-otp", version: "1.0.0" },
-		{ instructions: OTP_SYSTEM_PROMPT_ADDON },
+		{ instructions: CHROMECODE_SYSTEM_PROMPT },
 	);
 
 	// Tools
@@ -43,7 +43,7 @@ export function createServer(): McpServer {
 
 	server.tool(
 		"chromecode_execute",
-		"Proxy tool: decrypt ciphertext, verify authenticity, and return [AUTHENTICATED] or [UNAUTHENTICATED] message",
+		"Verify instruction authenticity: decrypt ciphertext, validate OTP envelope, return instruction or rejection",
 		executeSchema,
 		async (args) => executeTool(args, session),
 	);
