@@ -16,33 +16,41 @@ export async function executeTool(
 	args: { ciphertext: string; padBytesUsed: number; padPosition: number; sequence: number },
 	session: ChromeCodeSession,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-	const channel = await session.ensureDecryptReady();
+	try {
+		const channel = await session.ensureDecryptReady();
 
-	const msg: EncryptedMessage = {
-		ciphertext: Buffer.from(args.ciphertext, "base64"),
-		padBytesUsed: args.padBytesUsed,
-		padPosition: args.padPosition,
-		sequence: args.sequence,
-	};
+		const msg: EncryptedMessage = {
+			ciphertext: Buffer.from(args.ciphertext, "base64"),
+			padBytesUsed: args.padBytesUsed,
+			padPosition: args.padPosition,
+			sequence: args.sequence,
+		};
 
-	const result = await channel.decryptUserMessage(msg);
+		const result = await channel.decryptUserMessage(msg);
 
-	// Auto-resync if threshold reached
-	if (!result.authenticated && channel.shouldAutoResyncUA()) {
-		await channel.autoRecover("userToAgent");
-	}
+		// Auto-resync if threshold reached
+		if (!result.authenticated && channel.shouldAutoResyncUA()) {
+			await channel.autoRecover("userToAgent");
+		}
 
-	session.persist();
+		session.persist();
 
-	// Authenticated: return the instruction directly (no marker, no template)
-	// Unauthenticated: return only a generic rejection — never expose raw text
-	if (result.authenticated) {
+		// Authenticated: return the instruction directly (no marker, no template)
+		// Unauthenticated: return only a generic rejection — never expose raw text
+		if (result.authenticated) {
+			return {
+				content: [{ type: "text" as const, text: result.instruction }],
+			};
+		}
+
 		return {
-			content: [{ type: "text" as const, text: result.instruction }],
+			content: [{ type: "text" as const, text: REJECTION }],
+		};
+	} catch {
+		// Any internal error (pad exhausted, invalid input, etc.) → generic rejection
+		// Never expose internal state to the LLM
+		return {
+			content: [{ type: "text" as const, text: REJECTION }],
 		};
 	}
-
-	return {
-		content: [{ type: "text" as const, text: REJECTION }],
-	};
 }
