@@ -14,7 +14,7 @@ export async function executeTool(
 	args: { ciphertext: string; padBytesUsed: number; padPosition: number; sequence: number },
 	session: ChromeCodeSession,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-	const channel = await session.ensureReady();
+	const channel = await session.ensureDecryptReady();
 
 	const msg: EncryptedMessage = {
 		ciphertext: Buffer.from(args.ciphertext, "base64"),

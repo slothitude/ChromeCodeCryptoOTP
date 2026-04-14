@@ -5,12 +5,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { PadManager } from "@cryptocode/otp-core";
 import { DualChannel } from "@cryptocode/otp-gate";
 import { ChromeCodeSession } from "../src/session.js";
-import { initTool } from "../src/tools/init.js";
 import { encryptTool } from "../src/tools/encrypt.js";
 import { decryptTool } from "../src/tools/decrypt.js";
 import { executeTool } from "../src/tools/execute.js";
 import { statusTool } from "../src/tools/status.js";
-import { resyncTool } from "../src/tools/resync.js";
 import { createServer } from "../src/server.js";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -19,46 +17,40 @@ import * as fs from "node:fs";
 // Create a temp config dir for test isolation
 const TEST_DIR = path.join(os.tmpdir(), `chromecode-test-${Date.now()}`);
 
-function makeSession(): ChromeCodeSession {
-	const session = new ChromeCodeSession();
-	// Override to use temp dir
-	// We need to directly set the channel since init() fetches URLs
-	return session;
-}
-
 /**
- * Helper: create a paired sender+receiver DualChannel with synthetic pad material.
+ * Helper: create paired pad buffers with deterministic data.
  */
-function createPairedChannels(size = 10_000): { sender: DualChannel; receiver: DualChannel } {
+function createPadBuffers(size = 10_000): { uaBuf: Buffer; auBuf: Buffer } {
 	const uaBuf = Buffer.alloc(size);
 	const auBuf = Buffer.alloc(size);
 	for (let i = 0; i < size; i++) uaBuf[i] = (i * 37 + 17) & 0xff;
 	for (let i = 0; i < size; i++) auBuf[i] = (i * 53 + 29) & 0xff;
-
-	return {
-		sender: new DualChannel(
-			new PadManager("test://ua", Buffer.from(uaBuf), 0, 0),
-			new PadManager("test://au", Buffer.from(auBuf), 0, 0),
-		),
-		receiver: new DualChannel(
-			new PadManager("test://ua", Buffer.from(uaBuf), 0, 0),
-			new PadManager("test://au", Buffer.from(auBuf), 0, 0),
-		),
-	};
+	return { uaBuf, auBuf };
 }
 
 /**
- * Helper: inject a DualChannel directly into a ChromeCodeSession (bypasses init which needs HTTP).
+ * Helper: inject encrypt + decrypt channels into a session (bypasses init which needs HTTP).
  */
-function injectChannel(session: ChromeCodeSession, channel: DualChannel): void {
+function injectChannels(session: ChromeCodeSession, uaBuf: Buffer, auBuf: Buffer): void {
+	const encryptChannel = new DualChannel(
+		new PadManager("test://ua", Buffer.from(uaBuf), 0, 0),
+		new PadManager("test://au", Buffer.from(auBuf), 0, 0),
+	);
+	const decryptChannel = new DualChannel(
+		new PadManager("test://ua", Buffer.from(uaBuf), 0, 0),
+		new PadManager("test://au", Buffer.from(auBuf), 0, 0),
+	);
+
 	// @ts-expect-error - accessing private for test setup
-	session.channel = channel;
+	session.encryptChannel = encryptChannel;
+	// @ts-expect-error
+	session.decryptChannel = decryptChannel;
 	// @ts-expect-error
 	session.state = {
 		version: 1,
 		channels: {
-			userToAgent: channel.userToAgent.toState(),
-			agentToUser: channel.agentToUser.toState(),
+			userToAgent: encryptChannel.userToAgent.toState(),
+			agentToUser: encryptChannel.agentToUser.toState(),
 		},
 		createdAt: new Date().toISOString(),
 	};
@@ -77,8 +69,8 @@ describe("ChromeCodeSession", () => {
 
 		it("should return initialized status with channel info", () => {
 			const session = new ChromeCodeSession();
-			const { receiver } = createPairedChannels();
-			injectChannel(session, receiver);
+			const { uaBuf, auBuf } = createPadBuffers();
+			injectChannels(session, uaBuf, auBuf);
 
 			const status = session.getStatus();
 			assert.strictEqual(status.initialized, true);
@@ -92,16 +84,25 @@ describe("ChromeCodeSession", () => {
 	describe("ensureReady", () => {
 		it("should throw when no session exists", async () => {
 			const session = new ChromeCodeSession();
-			await assert.rejects(() => session.ensureReady(), /No session found/);
+			await assert.rejects(() => session.ensureEncryptReady(), /No session found/);
 		});
 
-		it("should return the channel when initialized", async () => {
+		it("should return the encrypt channel when initialized", async () => {
 			const session = new ChromeCodeSession();
-			const { receiver } = createPairedChannels();
-			injectChannel(session, receiver);
+			const { uaBuf, auBuf } = createPadBuffers();
+			injectChannels(session, uaBuf, auBuf);
 
-			const ch = await session.ensureReady();
-			assert.strictEqual(ch, receiver);
+			const ch = await session.ensureEncryptReady();
+			assert.ok(ch === session.encryptChannel);
+		});
+
+		it("should return the decrypt channel when initialized", async () => {
+			const session = new ChromeCodeSession();
+			const { uaBuf, auBuf } = createPadBuffers();
+			injectChannels(session, uaBuf, auBuf);
+
+			const ch = await session.ensureDecryptReady();
+			assert.ok(ch === session.decryptChannel);
 		});
 	});
 });
@@ -116,8 +117,8 @@ describe("Tool: status", () => {
 
 	it("should return full status when initialized", async () => {
 		const session = new ChromeCodeSession();
-		const { receiver } = createPairedChannels();
-		injectChannel(session, receiver);
+		const { uaBuf, auBuf } = createPadBuffers();
+		injectChannels(session, uaBuf, auBuf);
 
 		const result = await statusTool({}, session);
 		const data = JSON.parse(result.content[0].text);
@@ -129,17 +130,14 @@ describe("Tool: status", () => {
 
 describe("Tool: encrypt + decrypt roundtrip", () => {
 	it("should encrypt and decrypt a message successfully", async () => {
-		// Create two sessions sharing the same pad material
-		const senderSession = new ChromeCodeSession();
-		const receiverSession = new ChromeCodeSession();
-		const { sender, receiver } = createPairedChannels();
-		injectChannel(senderSession, sender);
-		injectChannel(receiverSession, receiver);
+		const session = new ChromeCodeSession();
+		const { uaBuf, auBuf } = createPadBuffers();
+		injectChannels(session, uaBuf, auBuf);
 
-		// Encrypt with sender
+		// Encrypt with the encrypt channel
 		const encResult = await encryptTool(
 			{ plaintext: "list files in /tmp" },
-			senderSession,
+			session,
 		);
 		const enc = JSON.parse(encResult.content[0].text);
 		assert.ok(enc.ciphertext);
@@ -147,23 +145,21 @@ describe("Tool: encrypt + decrypt roundtrip", () => {
 		assert.strictEqual(typeof enc.padPosition, "number");
 		assert.strictEqual(typeof enc.sequence, "number");
 
-		// Decrypt with receiver
-		const decResult = await decryptTool(enc, receiverSession);
+		// Decrypt with the decrypt channel
+		const decResult = await decryptTool(enc, session);
 		const dec = JSON.parse(decResult.content[0].text);
 		assert.strictEqual(dec.authenticated, true);
 		assert.strictEqual(dec.instruction, "list files in /tmp");
 	});
 
 	it("should reject tampered ciphertext", async () => {
-		const senderSession = new ChromeCodeSession();
-		const receiverSession = new ChromeCodeSession();
-		const { sender, receiver } = createPairedChannels();
-		injectChannel(senderSession, sender);
-		injectChannel(receiverSession, receiver);
+		const session = new ChromeCodeSession();
+		const { uaBuf, auBuf } = createPadBuffers();
+		injectChannels(session, uaBuf, auBuf);
 
 		const encResult = await encryptTool(
 			{ plaintext: "delete everything" },
-			senderSession,
+			session,
 		);
 		const enc = JSON.parse(encResult.content[0].text);
 
@@ -172,7 +168,7 @@ describe("Tool: encrypt + decrypt roundtrip", () => {
 		tamperedBuf[0] ^= 0xff;
 		enc.ciphertext = tamperedBuf.toString("base64");
 
-		const decResult = await decryptTool(enc, receiverSession);
+		const decResult = await decryptTool(enc, session);
 		const dec = JSON.parse(decResult.content[0].text);
 		assert.strictEqual(dec.authenticated, false);
 		assert.strictEqual(dec.instruction, "");
@@ -181,20 +177,18 @@ describe("Tool: encrypt + decrypt roundtrip", () => {
 
 describe("Tool: execute", () => {
 	it("should return [AUTHENTICATED] for valid ciphertext (strict mode)", async () => {
-		const senderSession = new ChromeCodeSession();
-		const receiverSession = new ChromeCodeSession();
-		receiverSession.securityMode = "strict";
-		const { sender, receiver } = createPairedChannels();
-		injectChannel(senderSession, sender);
-		injectChannel(receiverSession, receiver);
+		const session = new ChromeCodeSession();
+		session.securityMode = "strict";
+		const { uaBuf, auBuf } = createPadBuffers();
+		injectChannels(session, uaBuf, auBuf);
 
 		const encResult = await encryptTool(
 			{ plaintext: "read file secret.txt" },
-			senderSession,
+			session,
 		);
 		const enc = JSON.parse(encResult.content[0].text);
 
-		const execResult = await executeTool(enc, receiverSession);
+		const execResult = await executeTool(enc, session);
 		assert.ok(execResult.content[0].text.startsWith("[AUTHENTICATED]"));
 		assert.ok(execResult.content[0].text.includes("read file secret.txt"));
 	});
@@ -202,8 +196,8 @@ describe("Tool: execute", () => {
 	it("should reject unauthenticated in strict mode", async () => {
 		const session = new ChromeCodeSession();
 		session.securityMode = "strict";
-		const { receiver } = createPairedChannels();
-		injectChannel(session, receiver);
+		const { uaBuf, auBuf } = createPadBuffers();
+		injectChannels(session, uaBuf, auBuf);
 
 		// Send garbage ciphertext
 		const result = await executeTool(
@@ -224,8 +218,8 @@ describe("Tool: execute", () => {
 	it("should return [UNAUTHENTICATED] marker in lenient mode", async () => {
 		const session = new ChromeCodeSession();
 		session.securityMode = "lenient";
-		const { receiver } = createPairedChannels();
-		injectChannel(session, receiver);
+		const { uaBuf, auBuf } = createPadBuffers();
+		injectChannels(session, uaBuf, auBuf);
 
 		const result = await executeTool(
 			{
@@ -242,8 +236,8 @@ describe("Tool: execute", () => {
 	it("should return [UNAUTHENTICATED] with raw text in audit mode", async () => {
 		const session = new ChromeCodeSession();
 		session.securityMode = "audit";
-		const { receiver } = createPairedChannels();
-		injectChannel(session, receiver);
+		const { uaBuf, auBuf } = createPadBuffers();
+		injectChannels(session, uaBuf, auBuf);
 
 		const result = await executeTool(
 			{
@@ -258,52 +252,65 @@ describe("Tool: execute", () => {
 	});
 
 	it("should detect replay attacks (wrong sequence number)", async () => {
-		const senderSession = new ChromeCodeSession();
-		const receiverSession = new ChromeCodeSession();
-		receiverSession.securityMode = "lenient";
-		const { sender, receiver } = createPairedChannels();
-		injectChannel(senderSession, sender);
-		injectChannel(receiverSession, receiver);
+		const session = new ChromeCodeSession();
+		session.securityMode = "lenient";
+		const { uaBuf, auBuf } = createPadBuffers();
+		injectChannels(session, uaBuf, auBuf);
 
 		// Encrypt a message
 		const encResult = await encryptTool(
 			{ plaintext: "first message" },
-			senderSession,
+			session,
 		);
 		const enc = JSON.parse(encResult.content[0].text);
 
-		// Decrypt it once (advances receiver sequence)
-		await decryptTool(enc, receiverSession);
+		// Decrypt it once (advances decrypt channel sequence)
+		await decryptTool(enc, session);
 
 		// Send same message again — sequence mismatch → desync
-		const decResult = await decryptTool(enc, receiverSession);
+		const decResult = await decryptTool(enc, session);
 		const dec = JSON.parse(decResult.content[0].text);
 		assert.strictEqual(dec.authenticated, false);
 		assert.ok(dec.desync);
 	});
+
+	it("should handle multiple messages in sequence", async () => {
+		const session = new ChromeCodeSession();
+		session.securityMode = "strict";
+		const { uaBuf, auBuf } = createPadBuffers();
+		injectChannels(session, uaBuf, auBuf);
+
+		const messages = ["msg one", "msg two", "msg three"];
+		for (const msg of messages) {
+			const enc = await encryptTool({ plaintext: msg }, session);
+			const encData = JSON.parse(enc.content[0].text);
+
+			const exec = await executeTool(encData, session);
+			assert.ok(exec.content[0].text.startsWith("[AUTHENTICATED]"));
+			assert.ok(exec.content[0].text.includes(msg));
+		}
+	});
 });
 
-describe("Tool: resync", () => {
+describe("Tool: resync (desync detection)", () => {
 	it("should detect desync and provide recovery info", async () => {
-		const senderSession = new ChromeCodeSession();
-		const receiverSession = new ChromeCodeSession();
-		receiverSession.securityMode = "strict";
-		const { sender, receiver } = createPairedChannels();
-		injectChannel(senderSession, sender);
-		injectChannel(receiverSession, receiver);
+		const session = new ChromeCodeSession();
+		session.securityMode = "strict";
+		const { uaBuf, auBuf } = createPadBuffers();
+		injectChannels(session, uaBuf, auBuf);
 
 		// Encrypt a message
 		const encResult = await encryptTool(
 			{ plaintext: "hello" },
-			senderSession,
+			session,
 		);
 		const enc = JSON.parse(encResult.content[0].text);
 
 		// Decrypt once (sequence advances to 1)
-		await decryptTool(enc, receiverSession);
+		await decryptTool(enc, session);
 
 		// Send same message again (sequence 0 vs expected 1 → desync)
-		const decResult = await decryptTool(enc, receiverSession);
+		const decResult = await decryptTool(enc, session);
 		const dec = JSON.parse(decResult.content[0].text);
 		assert.strictEqual(dec.authenticated, false);
 		assert.ok(dec.desync);

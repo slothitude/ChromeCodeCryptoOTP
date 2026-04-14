@@ -11,7 +11,7 @@ export async function resyncTool(
 	args: { channel: "userToAgent" | "agentToUser" },
 	session: ChromeCodeSession,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-	const ch = await session.ensureReady();
+	const ch = await session.ensureDecryptReady();
 	const recoveryUrl = await ch.recoverFromDesync(args.channel);
 	session.persist();
 

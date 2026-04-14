@@ -10,7 +10,7 @@ export async function encryptTool(
 	args: { plaintext: string; nextUrl?: string },
 	session: ChromeCodeSession,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-	const channel = await session.ensureReady();
+	const channel = await session.ensureEncryptReady();
 	const encrypted = await channel.encryptUserMessage(args.plaintext, args.nextUrl);
 	session.persist();
 
